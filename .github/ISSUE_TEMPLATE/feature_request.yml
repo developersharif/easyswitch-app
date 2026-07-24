@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or improvement for EasySwitch
+title: "[feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation where you miss this feature.
+      placeholder: "When I …, I wish EasySwitch could …"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How do you imagine it working?
+    validations:
+      required: false
+  - type: input
+    id: platforms
+    attributes:
+      label: Which platforms does this concern?
+      placeholder: "macOS + Windows"
+    validations:
+      required: false

@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in EasySwitch doesn't work as expected
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Most EasySwitch bugs involve **two machines**,
+        so please tell us about both sides.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Copied a folder on the Mac
+        2. Pressed Ctrl+V on the Windows machine
+        3. Expected the folder to paste; instead …
+    validations:
+      required: true
+  - type: input
+    id: machine-a
+    attributes:
+      label: Machine A (the one whose keyboard/mouse you were using)
+      description: OS + version, and the EasySwitch version/build from its About card
+      placeholder: "macOS 15.5 — EasySwitch v0.1.0 (b106)"
+    validations:
+      required: true
+  - type: input
+    id: machine-b
+    attributes:
+      label: Machine B (the one being controlled / receiving)
+      description: OS + version, and the EasySwitch version/build from its About card
+      placeholder: "Windows 11 24H2 — EasySwitch v0.1.0 (b106)"
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Mouse / keyboard control (edge crossing, hotkeys)
+        - Clipboard — text or images
+        - Clipboard — files / folders
+        - Discovery / connection
+        - Web bridge
+        - Installing / updating
+        - License / account
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: >
+        Logs, screenshots, or details that might help (does it happen every
+        time? did it work in an earlier build?).
+    validations:
+      required: false

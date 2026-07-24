@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- EasySwitch "Edge Hop" app icon (docs/branding.md).
+     Two screens, one cursor mid-hop across the edge between them. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4F8EF7"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+
+  <!-- App tile -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#tile)"/>
+
+  <!-- Left screen -->
+  <rect x="88" y="352" width="360" height="320" rx="48" fill="#FFFFFF"/>
+  <!-- Right screen -->
+  <rect x="576" y="352" width="360" height="320" rx="48" fill="#FFFFFF"/>
+
+  <!-- Motion trail: blue dots on the left screen, white dot in the gap -->
+  <circle cx="240" cy="500" r="18" fill="#3B82F6" opacity="0.45"/>
+  <circle cx="324" cy="500" r="24" fill="#3B82F6" opacity="0.7"/>
+  <circle cx="408" cy="500" r="30" fill="#3B82F6"/>
+  <circle cx="500" cy="500" r="26" fill="#FFFFFF" opacity="0.9"/>
+
+  <!-- Cursor just landed on the right screen (the trail dots carry the
+       "crossed the edge" story; an edge-overlapping cursor fused its
+       outline with the screen edge and read as a notch). -->
+  <path fill="#1D4ED8" d="M628 402
+    l0 209
+    l49 -45
+    l30 73
+    l39 -17
+    l-31 -71
+    l66 -6
+    z"/>
+</svg>

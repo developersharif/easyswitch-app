@@ -1,0 +1,362 @@
+# Release CI for EasySwitch (ADR-099 in the source repo's docs).
+#
+# This PUBLIC repo hosts the release pipeline so builds run on GitHub's
+# free public-repo runners (the private repo's Actions quota is capped,
+# and macOS minutes count 10x there). The source is checked out from the
+# private repo via SRC_TOKEN — a fine-grained PAT scoped to ONLY
+# developersharif/easyswitch with Contents: read.
+#
+# Security posture:
+#   - No pull_request triggers of any kind: only repository_dispatch
+#     (fired by a relay workflow in the private repo on the usual
+#     "edit RELEASE.md + commit message containing 'build'" convention)
+#     and manual workflow_dispatch. Fork PRs can never run this, and
+#     forks never receive secrets anyway.
+#   - Only compiled artifacts leave the runner; logs are public but
+#     contain no source content.
+#
+# Build numbers (ADR-091 ledger): run_number is meaningless here (fresh
+# repo) and manual device releases minted numbers past the old CI's —
+# the plan job mints next = max(live update feed, this repo's release
+# tags) + 1 and refuses to run if the ledger is unreadable. The About
+# card shows "v{ver} (b{N})" and the updater compares b-numbers, so
+# monotonicity is load-bearing.
+name: release
+
+on:
+  repository_dispatch:
+    types: [build-release]
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "Override build number N (bare digits); empty = ledger + 1"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  SRC_REPO: developersharif/easyswitch
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.mint.outputs.build }}
+    steps:
+      - name: Mint the next build number from the ledgers
+        id: mint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERRIDE: ${{ github.event.inputs.build_number || '' }}
+        run: |
+          if [ -n "$OVERRIDE" ]; then
+            echo "override: b$OVERRIDE"
+            echo "build=$OVERRIDE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          feed=0
+          for os in macos windows linux; do
+            tag=$(curl -fsS --max-time 15 "https://easyswitch.realbrain.cc/v1/updates/$os" \
+              | jq -r '.tag // empty') || tag=""
+            n=${tag##*b}
+            if [ -n "$n" ] && [ "$n" -eq "$n" ] 2>/dev/null && [ "$n" -gt "$feed" ]; then
+              feed=$n
+            fi
+          done
+          gh_max=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '[.[].tag_name | match("b([0-9]+)$").captures[0].string | tonumber] | max // 0')
+          next=$(( feed > gh_max ? feed : gh_max ))
+          next=$(( next + 1 ))
+          # b106 shipped before this workflow existed — anything lower
+          # means the feed was unreachable AND this repo has no releases
+          # yet; minting would go backwards and confuse every updater.
+          if [ "$next" -le 106 ]; then
+            echo "ledger unreadable (feed=$feed gh=$gh_max) — refusing to mint b$next" >&2
+            exit 1
+          fi
+          echo "minted b$next (feed=$feed gh=$gh_max)"
+          echo "build=$next" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: plan
+    runs-on: macos-latest
+    env:
+      EASYSWITCH_BUILD: b${{ needs.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: developersharif/easyswitch
+          token: ${{ secrets.SRC_TOKEN }}
+          ref: main
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build both architectures
+        run: |
+          cargo build --release -p easyswitch --target aarch64-apple-darwin
+          cargo build --release -p easyswitch --target x86_64-apple-darwin
+      - name: Universal binary + .app bundle
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          lipo -create -output target/easyswitch-universal \
+            target/aarch64-apple-darwin/release/easyswitch \
+            target/x86_64-apple-darwin/release/easyswitch
+          bash packaging/macos/make_app.sh target/easyswitch-universal "$VER" dist
+      - name: Sign + notarize (only if cert secrets present; ADR-035)
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CERT_B64" ]; then
+            echo "no MACOS_CERT_BASE64 secret — shipping ad-hoc signed"; exit 0
+          fi
+          # Throwaway keychain for the Developer ID p12; the partition
+          # list grant lets codesign use the key without a UI prompt.
+          echo "$CERT_B64" | base64 -d > cert.p12
+          security create-keychain -p ci-keychain build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p ci-keychain build.keychain
+          security import cert.p12 -k build.keychain -P "$CERT_PW" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm cert.p12
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k ci-keychain build.keychain > /dev/null
+          security list-keychains -d user -s build.keychain login.keychain
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+            | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)
+          [ -n "$IDENTITY" ] || { echo "no Developer ID identity in the p12"; exit 1; }
+          codesign --force --options runtime --timestamp -s "$IDENTITY" dist/EasySwitch.app
+          # Fails the job if the ticket is refused (stapler is the gate —
+          # never publish "signed but unnotarized", it looks broken).
+          bash packaging/macos/notarize.sh dist/EasySwitch.app
+          spctl -a -t exec -vv dist/EasySwitch.app
+      - name: Zip (after stapling — the ticket must be inside the zip)
+        run: ditto -c -k --keepParent dist/EasySwitch.app "dist/EasySwitch-$VER-macos-universal.zip"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: macos
+          path: dist/*.zip
+          if-no-files-found: error
+
+  windows:
+    needs: plan
+    runs-on: windows-latest
+    env:
+      EASYSWITCH_BUILD: b${{ needs.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: developersharif/easyswitch
+          token: ${{ secrets.SRC_TOKEN }}
+          ref: main
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p easyswitch
+      # ADR-082: the exe must not import the dynamic VC++ runtime —
+      # clean Windows 10 machines lack VCRUNTIME140.dll and the app dies
+      # on launch. .cargo/config.toml sets +crt-static; this fails the
+      # build if that regresses (e.g. a RUSTFLAGS env var overriding it).
+      - name: Verify static CRT (no VC++ runtime imports)
+        shell: pwsh
+        run: |
+          $b = [IO.File]::ReadAllBytes("target/release/easyswitch.exe")
+          $pe = [BitConverter]::ToInt32($b, 0x3C)
+          $optOff = $pe + 24
+          $ddOff = $optOff + $(if ([BitConverter]::ToUInt16($b, $optOff) -eq 0x20B) { 112 } else { 96 })
+          $impRVA = [BitConverter]::ToInt32($b, $ddOff + 8)
+          $numSec = [BitConverter]::ToUInt16($b, $pe + 6)
+          $secOff = $optOff + [BitConverter]::ToUInt16($b, $pe + 20)
+          function RvaToOff($rva) {
+            for ($i = 0; $i -lt $numSec; $i++) {
+              $s = $secOff + 40 * $i
+              $va = [BitConverter]::ToInt32($b, $s + 12)
+              if ($rva -ge $va -and $rva -lt ($va + [BitConverter]::ToInt32($b, $s + 8))) {
+                return [BitConverter]::ToInt32($b, $s + 20) + ($rva - $va)
+              }
+            }
+            throw "rva 0x$($rva.ToString('X')) outside all sections"
+          }
+          $desc = RvaToOff $impRVA
+          $dlls = @()
+          while (($nameRVA = [BitConverter]::ToInt32($b, $desc + 12)) -ne 0) {
+            $off = RvaToOff $nameRVA
+            $end = $off
+            while ($b[$end] -ne 0) { $end++ }
+            $dlls += [Text.Encoding]::ASCII.GetString($b, $off, $end - $off)
+            $desc += 20
+          }
+          Write-Host "imports: $($dlls -join ', ')"
+          $bad = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|api-ms-win-crt)' }
+          if ($bad) { throw "dynamic CRT import(s): $($bad -join ', ') — +crt-static regressed (ADR-082)" }
+      - name: Sign the exe (only if a cert secret is present; ADR-029)
+        shell: bash
+        env:
+          CERT_B64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          CERT_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_B64" ]; then
+            echo "no WINDOWS_CERT_BASE64 secret — shipping unsigned"; exit 0
+          fi
+          echo "$CERT_B64" | base64 -d > cert.pfx
+          "$(cygpath "$(ls -d /c/Program\ Files*/Windows\ Kits/10/bin/*/x64/signtool.exe | tail -1)")" \
+            sign /f cert.pfx /p "$CERT_PW" /fd sha256 \
+            /tr http://timestamp.digicert.com /td sha256 \
+            ./target/release/easyswitch.exe
+      - name: Package (zip + NSIS installer)
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          mkdir dist
+          # Portable zip — this is the SELF-UPDATE asset (ADR-027).
+          7z a "dist/EasySwitch-$VER-windows-x64.zip" ./target/release/easyswitch.exe
+          # NSIS installer — the human download (ADR-029). makensis CDs to
+          # the script dir, so SRC_EXE/OUT must be ABSOLUTE Windows paths
+          # (the .nsi's own ..\..\assets refs stay script-relative).
+          choco install nsis -y --no-progress
+          MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
+          SETUP="EasySwitch-$VER-windows-setup.exe"
+          SRC_ABS=$(cygpath -w "$(pwd)/target/release/easyswitch.exe")
+          OUT_ABS=$(cygpath -w "$(pwd)/dist/$SETUP")
+          "$MAKENSIS" -DVERSION="$VER" -DSRC_EXE="$SRC_ABS" -DOUT="$OUT_ABS" \
+            packaging/windows/easyswitch.nsi
+      - name: Sign the installer (only if a cert secret is present)
+        shell: bash
+        env:
+          CERT_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          if [ ! -f cert.pfx ]; then echo "unsigned installer"; exit 0; fi
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          "$(cygpath "$(ls -d /c/Program\ Files*/Windows\ Kits/10/bin/*/x64/signtool.exe | tail -1)")" \
+            sign /f cert.pfx /p "$CERT_PW" /fd sha256 \
+            /tr http://timestamp.digicert.com /td sha256 \
+            "dist/EasySwitch-$VER-windows-setup.exe"
+          rm -f cert.pfx
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+          if-no-files-found: error
+
+  linux:
+    needs: plan
+    runs-on: ubuntu-22.04 # oldest supported runner = widest glibc compatibility
+    env:
+      EASYSWITCH_BUILD: b${{ needs.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: developersharif/easyswitch
+          token: ${{ secrets.SRC_TOKEN }}
+          ref: main
+      - name: System deps (Slint/winit build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev \
+            libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p easyswitch
+      - name: Tarball
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          mkdir -p dist/stage
+          cp target/release/easyswitch dist/stage/
+          printf 'EasySwitch %s (unsigned build)\n\nchmod +x easyswitch && ./easyswitch\nInput injection needs a writable /dev/uinput — the in-app Setup view\nshows the exact commands. Docs: https://easyswitch.realbrain.cc\n' "$VER" > dist/stage/README.txt
+          tar -czf "dist/easyswitch-$VER-linux-x64.tar.gz" -C dist/stage easyswitch README.txt
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [plan, macos, windows, linux]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: developersharif/easyswitch
+          token: ${{ secrets.SRC_TOKEN }}
+          ref: main
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-assets # NOT assets/ — that's the repo's logo dir
+          merge-multiple: true
+      - name: Create GitHub release (on THIS public repo)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          TAG="v$VER-b${{ needs.plan.outputs.build }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --prerelease \
+            --title "EasySwitch v$VER (build ${{ needs.plan.outputs.build }}${{ secrets.MACOS_CERT_BASE64 == '' && ', unsigned' || '' }})" \
+            --notes-file RELEASE.md \
+            release-assets/*
+      - name: Publish to easyswitch.realbrain.cc (R2, ADR-025/ADR-W6)
+        env:
+          ADMIN_SECRET: ${{ secrets.EASYSWITCH_ADMIN_SECRET }}
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          TAG="v$VER-b${{ needs.plan.outputs.build }}"
+          BASE="https://easyswitch.realbrain.cc"
+          # Upload one file to R2 and echo its manifest fragment.
+          upload() { # $1 = filename under release-assets/
+            local name="$1"
+            local sha size
+            sha=$(sha256sum "release-assets/$name" | cut -d' ' -f1)
+            size=$(stat -c%s "release-assets/$name")
+            echo "uploading $name ($size bytes)" >&2
+            curl -fsS -X POST \
+              "$BASE/v1/admin/release/asset?tag=$TAG&name=$name&sha256=$sha" \
+              -H "Authorization: Bearer $ADMIN_SECRET" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@release-assets/$name" >&2
+            printf '{"name":"%s","size":%s,"sha256":"%s"}' "$name" "$size" "$sha"
+          }
+          declare -A OS_FILE
+          WIN_SETUP=""
+          for f in release-assets/*; do
+            name=$(basename "$f")
+            case "$name" in
+              *-setup.exe)  WIN_SETUP="$name" ;;   # NSIS installer (ADR-029)
+              *macos*)      OS_FILE[macos]="$name" ;;
+              *windows*)    OS_FILE[windows]="$name" ;;  # portable zip = self-update asset
+              *linux*)      OS_FILE[linux]="$name" ;;
+              *) echo "unmapped asset $name" >&2; exit 1 ;;
+            esac
+          done
+          manifest_assets=""
+          for os in macos windows linux; do
+            name="${OS_FILE[$os]:-}"
+            [ -n "$name" ] || { echo "missing $os asset" >&2; exit 1; }
+            manifest_assets+="\"$os\":$(upload "$name"),"
+          done
+          installers=""
+          if [ -n "$WIN_SETUP" ]; then
+            installers=",\"installers\":{\"windows\":$(upload "$WIN_SETUP")}"
+          fi
+          manifest="{\"version\":\"$VER\",\"tag\":\"$TAG\",\"assets\":{${manifest_assets%,}}$installers}"
+          echo "publishing manifest for $TAG"
+          curl -fsS -X POST "$BASE/v1/admin/release/publish" \
+            -H "Authorization: Bearer $ADMIN_SECRET" \
+            -H "Content-Type: application/json" \
+            --data "$manifest"
+          echo
+          echo "public: $BASE/download"
