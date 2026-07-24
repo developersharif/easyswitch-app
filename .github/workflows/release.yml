@@ -47,11 +47,14 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     permissions:
-      actions: write # record LAST_BUILT_SHA (watch-source dedup)
-      contents: read
+      contents: write # create the src-<sha> dedup tag (watch-source)
     outputs:
       build: ${{ steps.mint.outputs.build }}
     steps:
+      # GITHUB_TOKEN cannot write repo VARIABLES (403 "Resource not
+      # accessible by integration"), so the dedup record is a tag:
+      # src-<private-repo sha> on this repo's main. watch-source treats
+      # tag-exists as "this commit already got its build attempt".
       - name: Record the source commit this run builds (watch-source dedup)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,8 +63,14 @@ jobs:
           SHA=$(GH_TOKEN="$SRC_TOKEN" gh api \
             "repos/developersharif/easyswitch/commits?path=RELEASE.md&sha=main&per_page=1" \
             --jq '.[0].sha')
-          gh variable set LAST_BUILT_SHA --repo "${{ github.repository }}" --body "$SHA"
-          echo "recorded $SHA"
+          if gh api "repos/${{ github.repository }}/git/ref/tags/src-$SHA" >/dev/null 2>&1; then
+            echo "src-$SHA already recorded"
+          else
+            HEAD=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq .object.sha)
+            gh api -X POST "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/tags/src-$SHA" -f sha="$HEAD" > /dev/null
+            echo "recorded src-$SHA"
+          fi
       - name: Mint the next build number from the ledgers
         id: mint
         env:

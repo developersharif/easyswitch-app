@@ -5,8 +5,9 @@
 # repo for the ADR-024 release convention — a main commit touching
 # RELEASE.md whose message contains "build" — and starts release.yml
 # for any such commit not yet built. Dedup: the release workflow's
-# plan job records the built commit in the LAST_BUILT_SHA repo
-# variable. Ritual is unchanged for the human (edit RELEASE.md +
+# plan job tags this repo's main with src-<private sha> (GITHUB_TOKEN
+# cannot write repo variables — 403 — but it can create refs).
+# Ritual is unchanged for the human (edit RELEASE.md +
 # "build" commit + push); worst-case latency ~10-15 min. Instant
 # path: gh workflow run release.yml -R developersharif/easyswitch-app
 #
@@ -22,6 +23,7 @@ on:
 
 permissions:
   actions: write
+  contents: read
 
 concurrency:
   group: watch-source
@@ -35,7 +37,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
-          LAST_BUILT: ${{ vars.LAST_BUILT_SHA }}
         run: |
           set -e
           GH_TOKEN="$SRC_TOKEN" gh api \
@@ -48,8 +49,8 @@ jobs:
             *build*) ;;
             *) echo "no 'build' in its message — nothing to do"; exit 0 ;;
           esac
-          if [ "$sha" = "$LAST_BUILT" ]; then
-            echo "already built — nothing to do"; exit 0
+          if gh api "repos/${{ github.repository }}/git/ref/tags/src-$sha" >/dev/null 2>&1; then
+            echo "already built (src-$sha tag exists) — nothing to do"; exit 0
           fi
           # An active release counts as building it (plan records the
           # sha in its first minute) — never double-fire.
