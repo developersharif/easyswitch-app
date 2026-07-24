@@ -98,10 +98,11 @@ jobs:
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+      # -q keeps the dependency list out of the public logs.
       - name: Build both architectures
         run: |
-          cargo build --release -p easyswitch --target aarch64-apple-darwin
-          cargo build --release -p easyswitch --target x86_64-apple-darwin
+          cargo build -q --release -p easyswitch --target aarch64-apple-darwin
+          cargo build -q --release -p easyswitch --target x86_64-apple-darwin
       - name: Universal binary + .app bundle
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
@@ -136,6 +137,9 @@ jobs:
           IDENTITY=$(security find-identity -v -p codesigning build.keychain \
             | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)
           [ -n "$IDENTITY" ] || { echo "no Developer ID identity in the p12"; exit 1; }
+          # Public logs: mask the identity string (developer name + team)
+          # for the rest of this job — covers codesign/notarize/spctl output.
+          echo "::add-mask::$IDENTITY"
           codesign --force --options runtime --timestamp -s "$IDENTITY" dist/EasySwitch.app
           # Fails the job if the ticket is refused (stapler is the gate —
           # never publish "signed but unnotarized", it looks broken).
@@ -163,7 +167,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release -p easyswitch
+        run: cargo build -q --release -p easyswitch
       # ADR-082: the exe must not import the dynamic VC++ runtime —
       # clean Windows 10 machines lack VCRUNTIME140.dll and the app dies
       # on launch. .cargo/config.toml sets +crt-static; this fails the
@@ -229,7 +233,9 @@ jobs:
           SETUP="EasySwitch-$VER-windows-setup.exe"
           SRC_ABS=$(cygpath -w "$(pwd)/target/release/easyswitch.exe")
           OUT_ABS=$(cygpath -w "$(pwd)/dist/$SETUP")
-          "$MAKENSIS" -DVERSION="$VER" -DSRC_EXE="$SRC_ABS" -DOUT="$OUT_ABS" \
+          # -V1 = errors/warnings only; default verbosity echoes the
+          # private .nsi script into the public log.
+          "$MAKENSIS" -V1 -DVERSION="$VER" -DSRC_EXE="$SRC_ABS" -DOUT="$OUT_ABS" \
             packaging/windows/easyswitch.nsi
       - name: Sign the installer (only if a cert secret is present)
         shell: bash
@@ -270,7 +276,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release -p easyswitch
+        run: cargo build -q --release -p easyswitch
       - name: Tarball
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)

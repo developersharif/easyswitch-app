@@ -1,0 +1,27 @@
+# Public-repo logs are world-readable and there is no per-run privacy
+# setting, so: the moment a release run SUCCEEDS, delete its logs (the
+# run status, release and artifacts stay). Failure logs are KEPT so the
+# owner can debug — after reading them, delete manually with:
+#   gh api -X DELETE repos/developersharif/easyswitch-app/actions/runs/<RUN_ID>/logs
+name: wipe-release-logs
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  wipe:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the release run's logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE \
+            "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/logs"
+          echo "logs wiped for run ${{ github.event.workflow_run.id }}"
