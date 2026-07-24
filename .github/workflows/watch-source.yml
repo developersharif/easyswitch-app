@@ -1,0 +1,66 @@
+# The private repo's Actions are budget-blocked (that's why CI moved
+# here) — it cannot even run a 10-second dispatch relay (proven live
+# 2026-07-24: "Actions budget is preventing further use"). So the
+# trigger lives HERE instead: every 10 minutes this polls the private
+# repo for the ADR-024 release convention — a main commit touching
+# RELEASE.md whose message contains "build" — and starts release.yml
+# for any such commit not yet built. Dedup: the release workflow's
+# plan job records the built commit in the LAST_BUILT_SHA repo
+# variable. Ritual is unchanged for the human (edit RELEASE.md +
+# "build" commit + push); worst-case latency ~10-15 min. Instant
+# path: gh workflow run release.yml -R developersharif/easyswitch-app
+#
+# Note: GitHub auto-disables schedules after 60 days without repo
+# activity — releases/issues here count as activity, but if the repo
+# ever goes quiet, re-enable under Actions.
+name: watch-source
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: watch-source
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start release for an unbuilt "build" commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SRC_TOKEN: ${{ secrets.SRC_TOKEN }}
+          LAST_BUILT: ${{ vars.LAST_BUILT_SHA }}
+        run: |
+          set -e
+          GH_TOKEN="$SRC_TOKEN" gh api \
+            "repos/developersharif/easyswitch/commits?path=RELEASE.md&sha=main&per_page=1" \
+            > commits.json
+          sha=$(jq -r '.[0].sha' commits.json)
+          msg=$(jq -r '.[0].commit.message' commits.json)
+          echo "latest RELEASE.md commit: $sha"
+          case "$msg" in
+            *build*) ;;
+            *) echo "no 'build' in its message — nothing to do"; exit 0 ;;
+          esac
+          if [ "$sha" = "$LAST_BUILT" ]; then
+            echo "already built — nothing to do"; exit 0
+          fi
+          # An active release counts as building it (plan records the
+          # sha in its first minute) — never double-fire.
+          active=0
+          for st in in_progress queued; do
+            n=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=$st&per_page=1" \
+              --jq '.total_count')
+            active=$((active + n))
+          done
+          if [ "$active" -gt 0 ]; then
+            echo "a release run is already active — skipping"; exit 0
+          fi
+          echo "starting release for $sha"
+          gh workflow run release.yml --repo "${{ github.repository }}"
