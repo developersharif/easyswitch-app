@@ -18,9 +18,7 @@
 </p>
 
 > **This repository is the public home of EasySwitch** — bug reports,
-> feature requests, discussions and release downloads. The application
-> source is developed in a private repository; the release pipeline in
-> this repo builds and publishes the official binaries.
+> feature requests, discussions and release downloads.
 
 ## What it does
 
