@@ -296,16 +296,19 @@ jobs:
           repository: developersharif/easyswitch
           token: ${{ secrets.SRC_TOKEN }}
           ref: main
-      # libpipewire + clang are for the virtual-display feature: the Linux
-      # host captures its virtual output through the portal's PipeWire
-      # stream, and pipewire-rs/libspa-sys generate bindings with
-      # bindgen (needs libclang) against libpipewire-0.3.pc.
+      # The virtual-display feature links four system stacks on Linux,
+      # all through -sys crates that probe pkg-config and run bindgen
+      # (hence libclang): PipeWire for the portal's ScreenCast stream,
+      # libva for the VAAPI encoder (vendor/cros-libva), and gbm/drm for
+      # the dmabuf path that feeds it. Missing any one fails the build
+      # at that crate, one per run — hence all four at once.
       - name: System deps (Slint/winit + virtual-display build)
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev \
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libpipewire-0.3-dev libspa-0.2-dev libclang-dev
+            libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
+            libva-dev libdrm-dev libgbm-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
