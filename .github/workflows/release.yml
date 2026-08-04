@@ -302,13 +302,24 @@ jobs:
       # libva for the VAAPI encoder (vendor/cros-libva), and gbm/drm for
       # the dmabuf path that feeds it. Missing any one fails the build
       # at that crate, one per run — hence all four at once.
+      # The runner stays on 22.04 ON PURPOSE (widest glibc), but its
+      # PipeWire predates the v0_3_53 API that pipewire-rs 0.10 targets:
+      # spa_meta_first / spa_meta_region_is_valid are missing and
+      # spa_video_info_raw has no `flags`. Upstream PipeWire headers
+      # come from the pipewire-debian PPA so the glibc floor is
+      # untouched — owner decision 2026-08-04, the alternative was
+      # raising the runner and locking older distros out of the app
+      # entirely, KVM included.
       - name: System deps (Slint/winit + virtual-display build)
         run: |
+          sudo add-apt-repository -y ppa:pipewire-debian/pipewire-upstream
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev \
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
             libva-dev libdrm-dev libgbm-dev
+      - name: Record the PipeWire headers this build compiled against
+        run: pkg-config --modversion libpipewire-0.3 libspa-0.2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
