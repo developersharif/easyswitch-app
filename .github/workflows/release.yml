@@ -318,11 +318,33 @@ jobs:
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
             libva-dev libdrm-dev libgbm-dev
-      - name: Record the PipeWire headers this build compiled against
-        run: pkg-config --modversion libpipewire-0.3 libspa-0.2
+      # 22.04 ships libva 2.14; vendor/cros-libva needs the AV1 encode
+      # structs that landed in 2.20 (`_VAEncPictureParameterBufferAV1`
+      # gained `refresh_frame_flags`). We never encode AV1 — the Linux
+      # host uses H.264/HEVC — but the AV1 wrappers are compiled
+      # unconditionally, and gating them out means patching enums in two
+      # vendored crates on every update. A pinned source build of libva
+      # is smaller, deterministic, and adds no third-party repo. It is
+      # build-time only: the symbols we actually call exist in older
+      # libva, so the runtime requirement for users is unchanged.
+      - name: Build libva 2.22 (22.04 ships 2.14 — see above)
+        run: |
+          sudo apt-get install -y meson ninja-build libx11-dev libxext-dev libwayland-dev
+          git clone --depth 1 -b 2.22.0 https://github.com/intel/libva /tmp/libva
+          cd /tmp/libva
+          meson setup build --prefix=/usr/local --libdir=lib/x86_64-linux-gnu \
+            -Dwith_x11=yes -Dwith_wayland=yes -Dwith_drm=yes >/dev/null
+          sudo ninja -C build install >/dev/null
+          sudo ldconfig
+      - name: Record the system libraries this build compiled against
+        env:
+          PKG_CONFIG_PATH: /usr/local/lib/x86_64-linux-gnu/pkgconfig
+        run: pkg-config --modversion libpipewire-0.3 libspa-0.2 libva
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
+        env:
+          PKG_CONFIG_PATH: /usr/local/lib/x86_64-linux-gnu/pkgconfig
         run: cargo build -q --release -p easyswitch --features virtual-display
       - name: Tarball
         run: |
