@@ -332,9 +332,11 @@ jobs:
           sudo apt-get install -y meson ninja-build libx11-dev libxext-dev libwayland-dev
           git clone --depth 1 -b 2.22.0 https://github.com/intel/libva /tmp/libva
           cd /tmp/libva
-          meson setup build --prefix=/usr/local --libdir=lib/x86_64-linux-gnu \
-            -Dwith_x11=yes -Dwith_wayland=yes -Dwith_drm=yes >/dev/null
-          sudo ninja -C build install >/dev/null
+          # Output is NOT silenced: the first attempt hid meson's own
+          # error behind >/dev/null and the step failed with nothing to
+          # read. Options are left to meson's auto-detection.
+          meson setup build --prefix=/usr/local --libdir=lib/x86_64-linux-gnu
+          sudo ninja -C build install
           sudo ldconfig
       - name: Record the system libraries this build compiled against
         env:
