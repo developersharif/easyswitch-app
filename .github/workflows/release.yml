@@ -121,10 +121,16 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       # -q keeps the dependency list out of the public logs.
+      # Phase 17 ships here: `virtual-display` is OFF by default in the
+      # workspace (it pulls wgpu + slint's wgpu renderer, ADR-107's
+      # blessed +1.40 MiB), so a release without this flag would not
+      # contain the feature at all. ADR-108 keeps the cost at zero for
+      # everyone else: the wgpu backend is only selected at startup for
+      # receiver-role installs.
       - name: Build both architectures
         run: |
-          cargo build -q --release -p easyswitch --target aarch64-apple-darwin
-          cargo build -q --release -p easyswitch --target x86_64-apple-darwin
+          cargo build -q --release -p easyswitch --features virtual-display --target aarch64-apple-darwin
+          cargo build -q --release -p easyswitch --features virtual-display --target x86_64-apple-darwin
       - name: Universal binary + .app bundle
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
@@ -189,7 +195,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build -q --release -p easyswitch
+        run: cargo build -q --release -p easyswitch --features virtual-display
       # ADR-082: the exe must not import the dynamic VC++ runtime —
       # clean Windows 10 machines lack VCRUNTIME140.dll and the app dies
       # on launch. .cargo/config.toml sets +crt-static; this fails the
@@ -298,7 +304,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build -q --release -p easyswitch
+        run: cargo build -q --release -p easyswitch --features virtual-display
       - name: Tarball
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
