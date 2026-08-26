@@ -119,6 +119,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
+      # The source repo PINS the toolchain (rust-toolchain.toml, ADR-183
+      # remediation Phase 0). rustup honours that pin over the `stable`
+      # this action makes default, so the two targets above are added to
+      # a toolchain the build never uses and the x86_64 slice dies with
+      # `can't find crate for core` (b152, run 32972190142 — the first
+      # cut after the pin landed). Install the PINNED toolchain and add
+      # both targets to it; rustup reads the same rust-toolchain.toml, so
+      # the pin stays single-sourced in the source repo.
+      - name: Install pinned toolchain + cross targets (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       # -q keeps the dependency list out of the public logs.
       # Phase 17 ships here: `virtual-display` is OFF by default in the
