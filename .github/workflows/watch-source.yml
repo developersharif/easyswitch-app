@@ -16,9 +16,11 @@
 # ever goes quiet, re-enable under Actions.
 name: watch-source
 
+# The 10-minute cron was REMOVED 2026-10-17 (owner decision): a "build"
+# commit no longer starts a release by itself — cut with
+# `gh workflow run release.yml -R developersharif/easyswitch-app`.
+# Re-add `schedule: - cron: "*/10 * * * *"` to bring the poller back.
 on:
-  schedule:
-    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 permissions:
