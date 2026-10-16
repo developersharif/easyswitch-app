@@ -324,9 +324,15 @@ jobs:
       # entirely, KVM included.
       - name: System deps (Slint/winit + virtual-display build)
         run: |
-          sudo add-apt-repository -y ppa:pipewire-debian/pipewire-upstream
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev \
+          # Launchpad's PPA file server answers 503 for individual
+          # packages in bursts (b153 cut, 2026-10-16: nine failed runs
+          # in a row); every download must succeed in the same pass, so
+          # retry per-file inside apt AND the whole install around it.
+          echo 'Acquire::Retries "8";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          retry() { for i in 1 2 3 4 5 6; do "$@" && return 0; echo "attempt $i failed: $*" >&2; sleep $((i * 20)); done; return 1; }
+          retry sudo add-apt-repository -y ppa:pipewire-debian/pipewire-upstream
+          retry sudo apt-get update
+          retry sudo apt-get install -y --fix-missing libxkbcommon-dev libwayland-dev libfontconfig1-dev \
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
             libva-dev libdrm-dev libgbm-dev
