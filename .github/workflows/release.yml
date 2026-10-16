@@ -332,10 +332,16 @@ jobs:
           retry() { for i in 1 2 3 4 5 6; do "$@" && return 0; echo "attempt $i failed: $*" >&2; sleep $((i * 20)); done; return 1; }
           retry sudo add-apt-repository -y ppa:pipewire-debian/pipewire-upstream
           retry sudo apt-get update
-          retry sudo apt-get install -y --fix-missing libxkbcommon-dev libwayland-dev libfontconfig1-dev \
+          PKGS="libxkbcommon-dev libwayland-dev libfontconfig1-dev \
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
-            libva-dev libdrm-dev libgbm-dev
+            libva-dev libdrm-dev libgbm-dev"
+          # apt keeps every .deb it finished, so each retry only fetches
+          # what is still missing; the install itself then needs no network.
+          # (Not --fix-missing: it skips the failed files and leaves unmet
+          # dependencies, which broke the first retry-based attempt, b154.)
+          retry sudo apt-get install -y --download-only $PKGS
+          sudo apt-get install -y $PKGS
       # 22.04 ships libva 2.14; vendor/cros-libva needs the AV1 encode
       # structs that landed in 2.20 (`_VAEncPictureParameterBufferAV1`
       # gained `refresh_frame_flags`). We never encode AV1 — the Linux
